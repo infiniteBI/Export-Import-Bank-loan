@@ -260,3 +260,56 @@ select
 from data_gov.approvaldata
 group by `Decision Authority`, `Program`
 order by total_approved desc;
+
+
+
+-- top lenders 
+ 
+
+select  `primary Borrower`, program, term,
+	count(*) as total_loan,
+    round(sum(`Approved/Declined Amount`),2) as Loan_amt 
+from data_gov.approvaldata
+group by `primary Borrower`, program, term
+order by total_loan desc ;
+
+
+
+
+WITH LenderMetrics AS (
+    SELECT 
+        COALESCE(`Primary Lender`, `Primary Applicant`) AS lender,
+        COUNT(*) AS loan_count,
+        SUM(`Approved/Declined Amount`) AS total_approved,
+        SUM(`Outstanding Exposure Amount`) AS total_outstanding,
+        SUM(`Small Business Authorized Amount`) AS total_small_biz,
+        SUM(`Minority Owned Authorized Amount`) AS total_minority_biz,
+        AVG(DATEDIFF(`Expiration Date`, `Effective Date`)) AS avg_loan_duration
+    FROM data_gov.approvaldata
+    WHERE `Primary Lender` != 'N/A'
+    GROUP BY lender
+)
+SELECT 
+    m.lender,
+    m.loan_count,
+    m.total_approved,
+    ROUND(100 * m.total_approved / (SELECT SUM(`Approved/Declined Amount`) FROM data_gov.approvaldata), 2) AS market_share_pct,
+    ROUND(m.total_outstanding / NULLIF(m.total_approved, 0), 3) AS outstanding_ratio,
+    ROUND(m.total_minority_biz / NULLIF(m.total_approved, 0), 3) AS minority_biz_ratio,
+    (SELECT MAX(t.size_vs_avg) 
+     FROM (
+        SELECT 
+            COALESCE(`Primary Lender`, `Primary Applicant`) AS sub_lender,
+            `Approved/Declined Amount` / NULLIF(AVG(`Approved/Declined Amount`) OVER(PARTITION BY COALESCE(`Primary Lender`, `Primary Applicant`)), 0) AS size_vs_avg
+        FROM data_gov.approvaldata
+     ) t 
+     WHERE t.sub_lender = m.lender) AS max_anomaly_score
+FROM LenderMetrics m
+WHERE EXISTS (
+    SELECT 1 
+    FROM data_gov.approvaldata sub 
+    WHERE COALESCE(sub.`Primary Lender`, sub.`Primary Applicant`) = m.lender
+    AND (sub.`Minority Owned Authorized Amount` > 0 OR sub.`Woman Owned Authorized Amount` > 0)
+)
+ORDER BY m.total_approved DESC;
+
